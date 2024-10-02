@@ -27,6 +27,7 @@ import org.cyclonedx.model.license.Expression;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -63,8 +64,20 @@ public final class LicenseResolver {
         return resolve(licenseString, new LicenseTextSettings( includeLicenseText, LicenseEncoding.BASE64));
     }
 
-    static LicenseChoice resolve(final String licenseString, final boolean includeLicenseText, final ObjectMapper mapper) {
-        return resolve(licenseString, new LicenseTextSettings( includeLicenseText, LicenseEncoding.BASE64), mapper);
+    /**
+     * Attempts to resolve the specified license string via SPDX license identifier and expression
+     * parsing first. If SPDX resolution is not successful, the method will attempt fuzzy matching.
+     * @param licenseString the license string to resolve
+     * @param includeLicenseText specifies is the resolved license will include the entire text of the license
+     * @param licenseMappingSource specifies the URI of the license mapping to use.
+     * @return a LicenseChoice object if resolution was successful, or null if unresolved
+     */
+    public static LicenseChoice resolve(final String licenseString, final boolean includeLicenseText, final URI licenseMappingSource) {
+        return resolve(licenseString, new LicenseTextSettings( includeLicenseText, LicenseEncoding.BASE64), licenseMappingSource);
+    }
+
+    static LicenseChoice resolve(final String licenseString, final boolean includeLicenseText, final ObjectMapper mapper, URI licenseMappingSource) {
+        return resolve(licenseString, new LicenseTextSettings( includeLicenseText, LicenseEncoding.BASE64), mapper, licenseMappingSource);
     }
 
     /**
@@ -75,17 +88,29 @@ public final class LicenseResolver {
      * @return a LicenseChoice object if resolution was successful, or null if unresolved
      */
     public static LicenseChoice resolve(final String licenseString, final LicenseTextSettings licenseTextSettings) {
-        final ObjectMapper mapper = new ObjectMapper();
-
-        return resolve(licenseString, licenseTextSettings, mapper);
+        return resolve(licenseString, licenseTextSettings, URI.create("/license-mapping.json"));
     }
 
-    static LicenseChoice resolve(final String licenseString, final LicenseTextSettings licenseTextSettings, final ObjectMapper mapper) {
+    /**
+     * Attempts to resolve the specified license string via SPDX license identifier and expression
+     * parsing first. If SPDX resolution is not successful, the method will attempt fuzzy matching.
+     * @param licenseString the license string to resolve
+     * @param licenseTextSettings specifies settings regarding the entire text of the resolved license
+     * @param licenseMappingSource specifies the URI of the license mapping to use
+     * @return a LicenseChoice object if resolution was successful, or null if unresolved
+     */
+    public static LicenseChoice resolve(final String licenseString, final LicenseTextSettings licenseTextSettings, URI licenseMappingSource) {
+        final ObjectMapper mapper = new ObjectMapper();
+
+        return resolve(licenseString, licenseTextSettings, mapper, licenseMappingSource);
+    }
+
+    static LicenseChoice resolve(final String licenseString, final LicenseTextSettings licenseTextSettings, final ObjectMapper mapper, URI licenseMappingSource) {
         try {
             LicenseChoice licenseChoice = resolveLicenseString(licenseString, licenseTextSettings, mapper);
 
             if (licenseChoice == null) {
-                licenseChoice = resolveFuzzyMatching(licenseString, licenseTextSettings, mapper);
+                licenseChoice = resolveFuzzyMatching(licenseString, licenseTextSettings, mapper, licenseMappingSource);
             }
             return licenseChoice;
         } catch (IOException ex) {
@@ -149,16 +174,19 @@ public final class LicenseResolver {
      * @param licenseString the license string (not the actual license text)
      * @param licenseTextSettings specifies settings regarding the entire text of the resolved license
      * @param mapper is to provide a Jackson ObjectMapper
+     * @param licenseMappingSource specifies the URI of the license mapping to use
      * @return a LicenseChoice object if resolved, otherwise null
      */
-    private static LicenseChoice resolveFuzzyMatching(final String licenseString, final LicenseTextSettings licenseTextSettings, final ObjectMapper mapper) throws IOException {
+    private static LicenseChoice resolveFuzzyMatching(
+            final String licenseString,
+            final LicenseTextSettings licenseTextSettings,
+            final ObjectMapper mapper,
+            final URI licenseMappingSource) throws IOException {
         if (licenseString == null) {
             return null;
         }
 
-        final InputStream is = LicenseResolver.class.getResourceAsStream("/license-mapping.json");
-
-        final SpdxLicenseMapping[] mappings = mapper.readValue(is, SpdxLicenseMapping[].class);
+        final SpdxLicenseMapping[] mappings = loadLicenseMappings(mapper, licenseMappingSource);
 
         if (mappings != null) {
             for (final SpdxLicenseMapping licenseMapping : mappings) {
@@ -180,6 +208,20 @@ public final class LicenseResolver {
         }
 
         return null;
+    }
+
+    private static SpdxLicenseMapping[] loadLicenseMappings(final ObjectMapper mapper, final URI licenseMappingSource) throws IOException {
+        final String schema = licenseMappingSource == null || licenseMappingSource.getScheme() == null ? "" : licenseMappingSource.getScheme();
+        switch (schema) {
+            case "http":
+            case "https":
+            case "file":
+                return mapper.readValue(licenseMappingSource.toURL(), SpdxLicenseMapping[].class);
+            default:
+                try (final InputStream is = LicenseResolver.class.getResourceAsStream("/license-mapping.json")) {
+                    return mapper.readValue(is, SpdxLicenseMapping[].class);
+                }
+        }
     }
 
     private static String urlNormalize(String input) {

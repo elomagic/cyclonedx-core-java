@@ -18,12 +18,21 @@
  */
 package org.cyclonedx.util;
 
+import org.apache.commons.io.IOUtils;
 import org.cyclonedx.model.LicenseChoice;
 import org.junit.jupiter.api.Test;
+import org.mockserver.client.MockServerClient;
+import org.mockserver.integration.ClientAndServer;
+
+import java.io.IOException;
+import java.net.URI;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockserver.integration.ClientAndServer.startClientAndServer;
+import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
 
 public class LicenseResolverTest {
 
@@ -71,7 +80,7 @@ public class LicenseResolverTest {
     }
 
     @Test
-    public void fuzzyMatchingTest() {
+    public void fuzzyMatchingTest() throws IOException {
         LicenseChoice c1 = LicenseResolver.resolve("The Apache Software License, Version 2.0");
         assertEquals("Apache-2.0", c1.getLicenses().get(0).getId());
         LicenseChoice c2 = LicenseResolver.resolve("Apache License (v2.0)");
@@ -80,5 +89,26 @@ public class LicenseResolverTest {
         assertEquals("Apache-2.0", c3.getLicenses().get(0).getId());
         LicenseChoice c4 = LicenseResolver.resolve("Modified BSD License");
         assertEquals("BSD-3-Clause", c4.getLicenses().get(0).getId());
+
+
+        try (ClientAndServer mockServer = startClientAndServer();
+             MockServerClient client = new MockServerClient("localhost", mockServer.getPort())) {
+
+            URI licenseMappingSource = URI.create("http://127.0.0.1:" + mockServer.getPort());
+
+            client.when(
+                    request()
+                            .withMethod("GET")
+                            .withPath("/")
+                    )
+                    .respond(
+                            response()
+                                    .withStatusCode(200)
+                                    .withBody(IOUtils.resourceToByteArray("/license-mapping.json"))
+                    );
+
+            LicenseChoice c5 = LicenseResolver.resolve("Public Domain, per Creative Commons CC0", true, licenseMappingSource);
+            assertEquals("CC0-1.0", c5.getLicenses().get(0).getId());
+        }
     }
 }
